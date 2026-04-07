@@ -1,0 +1,5 @@
+📁 dnn/ (或者你的任意项目文件夹)
+ ├── 📄 surrogate_model.py
+ ├── 🧠 airfoil_dnn_weights.pth
+ └── 📊 Airfoil_Aerodynamic_Database.csv
+

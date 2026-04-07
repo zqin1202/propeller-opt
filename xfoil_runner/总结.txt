@@ -1,0 +1,3 @@
+run_xfoil_test.py 测试xfoil使用
+hicks_henne_deform.py hh函数生成18个参数，改变翼型
+generate_database.py python调用xfoil生成数据库
