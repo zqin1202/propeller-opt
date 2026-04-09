@@ -27,7 +27,7 @@ class PSO:
         self.velocities = np.zeros((num_particles, num_vars))
         
         # 强制设入火种，保证种群初期不全灭
-        self.positions[0] = np.array([0.21, 50.0, 0.5] + [0.0] * 18)
+        self.positions[0] = np.array([0.21, 50.0, 0.5] + [0.0] * 18+ [1.0])
         
         self.pbest_positions = self.positions.copy()
         self.pbest_fitness = np.full(num_particles, -np.inf)
@@ -46,7 +46,7 @@ class PSO:
                 # ====================================================
                 # 【第一道防线】几何形态验证：非法翼型直接淘汰！
                 # ====================================================
-                if not self.validator.is_valid(self.positions[i][3:]):
+                if not self.validator.is_valid(self.positions[i][3:21]):
                     continue 
                 
                 # ====================================================
@@ -95,7 +95,6 @@ class PSO:
 
 
 if __name__ == "__main__":
-    # ⚠️ 【极其重要】请把这里的相对路径修改为你电脑里 CLARKY_geo.dat 的真实位置！
     base_airfoil_path = os.path.join(os.path.dirname(__file__), "..", "xfoil_runner", "CLARKY_geo.dat")
     
     if not os.path.exists(base_airfoil_path):
@@ -109,10 +108,11 @@ if __name__ == "__main__":
     # 物理参数边界设定
     bounds_3 = [(0.15, 0.24), (2.0, 100.0), (0.3, 0.5)]
     bounds_18 = [(-0.01, 0.01)] * 18  # 保持 ±0.01
-    full_bounds = bounds_3 + bounds_18
+    bounds_1 = [(0.5, 1.5)]
+    full_bounds = bounds_3 + bounds_18 + bounds_1
     
     # 启动 PSO
-    pso = PSO(num_particles=20, num_vars=21, bounds=full_bounds, max_iter=30, validator=geom_validator)
+    pso = PSO(num_particles=20, num_vars=22, bounds=full_bounds, max_iter=30, validator=geom_validator)
     best_position, best_fitness = pso.run()
     
     print("\n" + "="*40)
@@ -127,10 +127,11 @@ if __name__ == "__main__":
         print(f"-> 对应空气中效率: {final_eta_air * 100:.2f}%")
         print(f"-> 对应水中效率:   {final_eta_water * 100:.2f}%\n")
         
-        print("[最佳 21 维参数解]")
+        print("[最佳 22 维参数解]")
         print(f"三维弦长参数: cm = {best_position[0]:.4f}, beta = {best_position[1]:.4f}, m = {best_position[2]:.4f}")
+        print(f"全局扭转角缩放: pitch_scale = {best_position[21]:.4f}")
         print("二维翼型权重 (18维):")
-        print(np.round(best_position[3:], 4))
+        print(np.round(best_position[3:21], 4))
         
         # 打印详细解剖数据
         print_optimal_details(best_position.tolist())

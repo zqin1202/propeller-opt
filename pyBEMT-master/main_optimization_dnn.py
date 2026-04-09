@@ -137,52 +137,47 @@ def calculate_actual_chord(radius, R, cm, beta, m):
     return float(actual_chord)
 
 def evaluate_individual(weights_list):
-    """
-    输入 weightlist，由MOPSO传来，21 维参数，前3维为三维弦长参数 (cm, beta, m)，后18维为二维翼型参数。
-    输出 eta_air和eta_water,代表该螺旋桨在空气和水中的效率
-    """
     try:
-        # 几何约束检查
-       # weights_18 = weights_list[3:]
-
-        #x, yu, yl = generate_airfoil_coordinates(weights_18)
-
-        #if not geometry_constraints(x, yu, yl):
-         #   return 0.0, 0.0
         cm, beta, m = weights_list[0], weights_list[1], weights_list[2]
-        weights_18 = weights_list[3:]
+        weights_18 = weights_list[3:21]  # 严格提取中间18个
+        pitch_scale = weights_list[21]   # 提取最后一个作为缩放系数
 
         # ---------------- 考核 A: 空气环境 ----------------
         solver_air = Solver('examples/baseline_propeller_air.ini')
         target_Re_air = 200000.0 if solver_air.fluid.rho > 500.0 else 50000.0
         R_propeller = solver_air.rotor.diameter / 2.0
-        
+
         for sec in solver_air.rotor.sections:
             sec.airfoil = DNNAirfoilWrapper(global_predictor, weights_18, target_Re_air)
             sec.chord = calculate_actual_chord(sec.radius, R_propeller, cm, beta, m)
-            
-        # 使用 contextlib 绝对拦截 pyBEMT 内部的一切 print 打印
-        with open(os.devnull, 'w') as fnull, contextlib.redirect_stdout(fnull):
-            # 正确解包 4 个返回值
-            T_air, Q_air, P_air, df_air = solver_air.run()
-        
-        # 使用官方函数计算整桨宏观效率 (J, CT, CQ, CP, eta)
-        _, _, _, _, eta_air = solver_air.rotor_coeffs(T_air, Q_air, P_air)
+            # 动态缩放扭转角，并强制同步到底层弧度
+            sec.pitch = sec.pitch * pitch_scale  
+            if hasattr(sec, 'pitch_rad'):
+                sec.pitch_rad = np.radians(sec.pitch)
 
+        with open(os.devnull, 'w') as fnull, contextlib.redirect_stdout(fnull):
+            T_air, Q_air, P_air, df_air = solver_air.run()
+            
+        # 【找回丢失的代码】计算空气效率
+        _, _, _, _, eta_air = solver_air.rotor_coeffs(T_air, Q_air, P_air)
 
         # ---------------- 考核 B: 水下环境 ----------------
         solver_water = Solver('examples/baseline_propeller_water.ini')
         target_Re_water = 200000.0 if solver_water.fluid.rho > 500.0 else 50000.0
-        
+
         for sec in solver_water.rotor.sections:
             sec.airfoil = DNNAirfoilWrapper(global_predictor, weights_18, target_Re_water)
             sec.chord = calculate_actual_chord(sec.radius, R_propeller, cm, beta, m)
-            
+            # 水下同样进行缩放和同步
+            sec.pitch = sec.pitch * pitch_scale  
+            if hasattr(sec, 'pitch_rad'):
+                sec.pitch_rad = np.radians(sec.pitch)
+
         with open(os.devnull, 'w') as fnull, contextlib.redirect_stdout(fnull):
             T_water, Q_water, P_water, df_water = solver_water.run()
             
+        # 【找回丢失的代码】计算水下效率
         _, _, _, _, eta_water = solver_water.rotor_coeffs(T_water, Q_water, P_water)
-
 
         # 剔除无效效率
         if np.isnan(eta_air) or np.isnan(eta_water) or eta_air <= 0 or eta_water <= 0:
@@ -191,15 +186,18 @@ def evaluate_individual(weights_list):
         return float(eta_air), float(eta_water)
 
     except Exception as e:
-        # 调试阶段可以打开下一行看看是否有意外报错
-        # print(f"评估发生代码异常: {e}") 
+        # 强制报错显形
+        print(f" [致命错误] evaluate_individual 发生代码崩溃: {e}") 
         return 0.0, 0.0
+
+
 def print_optimal_details(weights_list):
     """
     专门用于在优化结束后，解剖并打印最佳螺旋桨的 3D 截面细节（攻角、升阻力分布）
     """
     cm, beta, m = weights_list[0], weights_list[1], weights_list[2]
-    weights_18 = weights_list[3:]
+    weights_18 = weights_list[3:21]
+    pitch_scale = weights_list[21]
 
     print("\n" + "="*60)
     print("🔬 [深度解剖] 最佳两栖螺旋桨 沿展向截面气动/水动力分布")
@@ -213,13 +211,17 @@ def print_optimal_details(weights_list):
     for sec in solver_air.rotor.sections:
         sec.airfoil = DNNAirfoilWrapper(global_predictor, weights_18, target_Re_air)
         sec.chord = calculate_actual_chord(sec.radius, R_propeller, cm, beta, m)
+        # 【修复遗漏】解剖打印时也要应用缩放！
+        sec.pitch = sec.pitch * pitch_scale
+        if hasattr(sec, 'pitch_rad'):
+            sec.pitch_rad = np.radians(sec.pitch)
         
     with open(os.devnull, 'w') as fnull, contextlib.redirect_stdout(fnull):
         _, _, _, df_air = solver_air.run()
         
     print("\n【工况 A: 空气中 (7200 RPM, 2.0 m/s)】")
     if 'alpha' in df_air.columns:
-        df_air['alpha_deg'] = np.degrees(df_air['alpha']) # 将弧度转为人类易读的角度
+        df_air['alpha_deg'] = np.degrees(df_air['alpha'])
         print(df_air[['radius', 'chord', 'pitch', 'alpha_deg', 'Cl', 'Cd']].to_string(index=False, float_format="%.4f"))
     else:
         print(df_air.to_string(index=False))
@@ -231,6 +233,10 @@ def print_optimal_details(weights_list):
     for sec in solver_water.rotor.sections:
         sec.airfoil = DNNAirfoilWrapper(global_predictor, weights_18, target_Re_water)
         sec.chord = calculate_actual_chord(sec.radius, R_propeller, cm, beta, m)
+        # 【修复遗漏】解剖打印时也要应用缩放！
+        sec.pitch = sec.pitch * pitch_scale
+        if hasattr(sec, 'pitch_rad'):
+            sec.pitch_rad = np.radians(sec.pitch)
         
     with open(os.devnull, 'w') as fnull, contextlib.redirect_stdout(fnull):
         _, _, _, df_water = solver_water.run()
@@ -242,9 +248,7 @@ def print_optimal_details(weights_list):
     else:
         print(df_water.to_string(index=False))
 
-# ==========================================
-# 独立运行入口：测试基线螺旋桨
-# ==========================================
+        
 if __name__ == '__main__':
     # 基线螺旋桨参数
     baseline_params = [0.21, 50.0, 0.5] + [0.0] * 18
