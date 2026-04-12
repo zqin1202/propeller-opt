@@ -136,42 +136,45 @@ def calculate_actual_chord(radius, R, cm, beta, m):
     actual_chord = c_nondim * R
     return float(actual_chord)
 
+
+
 def evaluate_individual(weights_list):
     try:
+        # 前3维：弦长参数
         cm, beta, m = weights_list[0], weights_list[1], weights_list[2]
-        weights_18 = weights_list[3:21]  # 严格提取中间18个
-        pitch_scale = weights_list[21]   # 提取最后一个作为缩放系数
+        # 后18维：翼型权重（共21维）
+        weights_18 = weights_list[3:21]
+
+        # --------------------------------
+        # 约束：18维翼型权重 L1 范数 ≤ 0.12
+        # --------------------------------
+        if np.sum(np.abs(weights_18)) > 0.12:
+            return 0.0, 0.0
 
         # ---------------- 考核 A: 空气环境 ----------------
         solver_air = Solver('examples/baseline_propeller_air.ini')
         target_Re_air = 200000.0 if solver_air.fluid.rho > 500.0 else 50000.0
         R_propeller = solver_air.rotor.diameter / 2.0
 
+        # 应用翼型与弦长，保留配置文件中的原始 pitch
         for sec in solver_air.rotor.sections:
             sec.airfoil = DNNAirfoilWrapper(global_predictor, weights_18, target_Re_air)
             sec.chord = calculate_actual_chord(sec.radius, R_propeller, cm, beta, m)
-            # 动态缩放扭转角，并强制同步到底层弧度
-            sec.pitch = sec.pitch * pitch_scale  
-            if hasattr(sec, 'pitch_rad'):
-                sec.pitch_rad = np.radians(sec.pitch)
 
         with open(os.devnull, 'w') as fnull, contextlib.redirect_stdout(fnull):
             T_air, Q_air, P_air, df_air = solver_air.run()
-            
-        # 【找回丢失的代码】计算空气效率
+
+        # 计算空气效率
         _, _, _, _, eta_air = solver_air.rotor_coeffs(T_air, Q_air, P_air)
 
         # ---------------- 考核 B: 水下环境 ----------------
         solver_water = Solver('examples/baseline_propeller_water.ini')
         target_Re_water = 200000.0 if solver_water.fluid.rho > 500.0 else 50000.0
 
+        # 应用翼型与弦长，保留配置文件中的原始 pitch
         for sec in solver_water.rotor.sections:
             sec.airfoil = DNNAirfoilWrapper(global_predictor, weights_18, target_Re_water)
             sec.chord = calculate_actual_chord(sec.radius, R_propeller, cm, beta, m)
-            # 水下同样进行缩放和同步
-            sec.pitch = sec.pitch * pitch_scale  
-            if hasattr(sec, 'pitch_rad'):
-                sec.pitch_rad = np.radians(sec.pitch)
 
         with open(os.devnull, 'w') as fnull, contextlib.redirect_stdout(fnull):
             T_water, Q_water, P_water, df_water = solver_water.run()
@@ -197,7 +200,6 @@ def print_optimal_details(weights_list):
     """
     cm, beta, m = weights_list[0], weights_list[1], weights_list[2]
     weights_18 = weights_list[3:21]
-    pitch_scale = weights_list[21]
 
     print("\n" + "="*60)
     print("🔬 [深度解剖] 最佳两栖螺旋桨 沿展向截面气动/水动力分布")
@@ -207,18 +209,15 @@ def print_optimal_details(weights_list):
     solver_air = Solver('examples/baseline_propeller_air.ini')
     target_Re_air = 200000.0 if solver_air.fluid.rho > 500.0 else 50000.0
     R_propeller = solver_air.rotor.diameter / 2.0
-    
+
+    # 应用翼型与弦长，保留配置文件中的原始 pitch
     for sec in solver_air.rotor.sections:
         sec.airfoil = DNNAirfoilWrapper(global_predictor, weights_18, target_Re_air)
         sec.chord = calculate_actual_chord(sec.radius, R_propeller, cm, beta, m)
-        # 【修复遗漏】解剖打印时也要应用缩放！
-        sec.pitch = sec.pitch * pitch_scale
-        if hasattr(sec, 'pitch_rad'):
-            sec.pitch_rad = np.radians(sec.pitch)
-        
+
     with open(os.devnull, 'w') as fnull, contextlib.redirect_stdout(fnull):
         _, _, _, df_air = solver_air.run()
-        
+
     print("\n【工况 A: 空气中 (7200 RPM, 2.0 m/s)】")
     if 'alpha' in df_air.columns:
         df_air['alpha_deg'] = np.degrees(df_air['alpha'])
@@ -229,14 +228,11 @@ def print_optimal_details(weights_list):
     # --- 水下环境解剖 ---
     solver_water = Solver('examples/baseline_propeller_water.ini')
     target_Re_water = 200000.0 if solver_water.fluid.rho > 500.0 else 50000.0
-    
+
+    # 应用翼型与弦长，保留配置文件中的原始 pitch
     for sec in solver_water.rotor.sections:
         sec.airfoil = DNNAirfoilWrapper(global_predictor, weights_18, target_Re_water)
         sec.chord = calculate_actual_chord(sec.radius, R_propeller, cm, beta, m)
-        # 【修复遗漏】解剖打印时也要应用缩放！
-        sec.pitch = sec.pitch * pitch_scale
-        if hasattr(sec, 'pitch_rad'):
-            sec.pitch_rad = np.radians(sec.pitch)
         
     with open(os.devnull, 'w') as fnull, contextlib.redirect_stdout(fnull):
         _, _, _, df_water = solver_water.run()
@@ -251,7 +247,7 @@ def print_optimal_details(weights_list):
 
 if __name__ == '__main__':
     # 基线螺旋桨参数
-    baseline_params = [0.21, 50.0, 0.5] + [0.0] * 18
+    baseline_params = [0.21, 50.0, 0.5] + [0.0] * 18  # 21维：3维弦长 + 18维翼型权重
     
     print("\n" + "="*50)
     print("🚀 开始对 [基线螺旋桨] 进行独立双介质评估...")

@@ -23,17 +23,29 @@ class AirfoilDNN(nn.Module):
 # 2. 封装预测器类
 class AirfoilPredictor:
     def __init__(self, scaler_X_path='scaler_X.pkl', scaler_y_path='scaler_y.pkl', weights_path='airfoil_dnn_weights.pth'):
-        print("正在初始化 AI 代理模型，加载极速版...")
-        
+        # 检查是否在多进程环境下，如果是则抑制打印
+        import sys
+        import multiprocessing
+        is_in_worker = hasattr(multiprocessing, 'current_process') and multiprocessing.current_process().name != 'MainProcess'
+
+        if not is_in_worker:
+            print("正在初始化 AI 代理模型，加载极速版...")
+
+        # 设置确定性模式，确保可重复性
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
         # 1. 直接一秒加载保存好的 scaler，不再读取 csv
         self.scaler_X = joblib.load(scaler_X_path)
         self.scaler_y = joblib.load(scaler_y_path)
-        
+
         # 2. 唤醒神经网络
         self.model = AirfoilDNN()
         self.model.load_state_dict(torch.load(weights_path))
         self.model.eval()
-        print("✅ AI 预测器已极速准备就绪！")
+
+        if not is_in_worker:
+            print("✅ AI 预测器已极速准备就绪！")
 
     def predict(self, weights_list, Re, alpha):
         """
